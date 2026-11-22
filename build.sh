@@ -306,9 +306,13 @@ main() {
   # Resolve every path now, so the uv --directory below cannot shift them.
   # pwd -P follows symlinks, so the build-dir checks below compare real
   # locations: through a symlink, two different strings can name one directory.
+  # The two that may need creating go through $resolved, so a failure still
+  # has the path the caller asked for to report.
   INPUT="$(cd "$INPUT" && pwd -P)"
-  OUTPUT="$(mkdir -p "$OUTPUT" && cd "$OUTPUT" && pwd -P)" ||
+  local resolved
+  resolved="$(mkdir -p "$OUTPUT" && cd "$OUTPUT" && pwd -P)" ||
     fail "cannot create output-path: $OUTPUT"
+  OUTPUT="$resolved"
 
   : "${BUILD_DIR:=$INPUT/build}"
   # Checked before pwd -P below swaps the link for its target: cleanup would
@@ -323,8 +327,9 @@ main() {
   [[ ! -L "$link_check" ]] ||
     fail "build-dir $BUILD_DIR is a symlink, so cleaning it up would delete" \
       "the directory it points to. Point build-dir at a real directory."
-  BUILD_DIR="$(mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR" && pwd -P)" ||
+  resolved="$(mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR" && pwd -P)" ||
     fail "cannot create build-dir: $BUILD_DIR"
+  BUILD_DIR="$resolved"
 
   # Everything below deletes this directory, so refuse any path that would take
   # something else down with it: the project, the finished zip, the runner's
