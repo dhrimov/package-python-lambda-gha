@@ -90,6 +90,7 @@ own `actions/checkout` step. `upload-artifact: true` needs nothing extra.
 |---|---|---|
 | `input-path` | `.` | Directory containing the Lambda project's `pyproject.toml`. |
 | `output-path` | `terraform` | Directory the zip is written to. Created if missing. |
+| `build-dir` | `<input-path>/build` | Scratch directory, **deleted** before and after every build. See [The build directory gets deleted](#the-build-directory-gets-deleted). |
 | `python-version` | **none - required** | Target AWS Lambda Python runtime: `3.11`, `3.12`, `3.13`, or `3.14`. |
 | `platform` | **none - required** | uv target platform: `aarch64-manylinux2014`, `x86_64-manylinux2014`, `aarch64-manylinux_2_28`, `x86_64-manylinux_2_28`, `aarch64-manylinux_2_34`, or `x86_64-manylinux_2_34`. See [`platform` and the Lambda runtime](#platform-and-the-lambda-runtime). |
 | `packager-version` | `1.0.0` | `package-python-function` version to package with. |
@@ -100,16 +101,23 @@ own `actions/checkout` step. `upload-artifact: true` needs nothing extra.
 | `artifact-name` | derived | Artifact name. See [Artifacts](#artifacts). |
 | `artifact-retention-days` | `7` | Days to keep the uploaded artifact. |
 
-### The build directory is `<input-path>/build`, and it gets deleted
+### The build directory gets deleted
 
 > [!WARNING]
-> The action builds in `<input-path>/build` and **deletes that whole
-> directory** before and after every build. Anything you keep there is lost.
+> The action builds in `build-dir`, `<input-path>/build` by default, and
+> **deletes that whole directory** before and after every build. Anything you
+> keep there is lost.
 
-`build.sh` takes a `--build-dir` flag to move it, but the action does not
-expose it yet. There is no input for it, so the path is always
-`<input-path>/build`. If your project already uses a `build/` directory, move
-that content somewhere else before using this action.
+If your project already uses a `build/` directory, set `build-dir` to a path
+outside it, such as `${{ runner.temp }}/lambda-build`. A relative path is
+resolved against the workspace, the same as `input-path` and `output-path`.
+The action refuses a `build-dir` that is, or is a parent of, `input-path`,
+`output-path`, the runner's temp directory (`runner.temp` itself, not a
+directory inside it), the home directory, or the action's own checkout.
+Symlinks are followed before that check, and a `build-dir` that is itself a
+symlink is refused, because cleanup would delete what it points to. Never
+share one `build-dir` between builds running at the same time: each one
+deletes the other's work in progress.
 
 ### `python-version` and `platform` have no defaults on purpose
 

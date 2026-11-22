@@ -13,6 +13,19 @@ inputs:
   output-path:
     description: Directory the deployment zip is written to. Created if missing.
     default: terraform
+  build-dir:
+    # A composite `default:` can only be a fixed string, and a fixed one would
+    # be relative to the workspace, not to input-path. Empty is passed through
+    # as-is, and build.sh fills in <input-path>/build.
+    description: >-
+      Scratch directory for intermediates. The whole directory is deleted
+      before and after every build, so never point it at anything you want
+      to keep. A relative path is resolved against the workspace, like
+      input-path and output-path. Must not be, or be a parent of, input-path,
+      output-path, the runner's temp directory, the home directory or this
+      action's checkout, and must not be a symlink. Empty means
+      <input-path>/build.
+    default: ""
   python-version:
     # GitHub does not enforce `required` on composite inputs, so this line is
     # documentation only - build.sh does the real check. Do not add a default:
@@ -94,10 +107,13 @@ runs:
     - name: Package
       id: package
       shell: bash
+      # BUILD_DIR is passed even when empty: build.sh treats an empty
+      # --build-dir as unset and falls back to <input-path>/build.
       run: |
         "$GITHUB_ACTION_PATH/build.sh" \
           --input "$INPUT_PATH" \
           --output "$OUTPUT_PATH" \
+          --build-dir "$BUILD_DIR" \
           --python "$PYTHON_VERSION" \
           --platform "$PLATFORM" \
           --packager-version "$PACKAGER_VERSION" \
@@ -105,6 +121,7 @@ runs:
       env:
         INPUT_PATH: ${{ inputs.input-path }}
         OUTPUT_PATH: ${{ inputs.output-path }}
+        BUILD_DIR: ${{ inputs.build-dir }}
         PYTHON_VERSION: ${{ inputs.python-version }}
         PLATFORM: ${{ inputs.platform }}
         PACKAGER_VERSION: ${{ inputs.packager-version }}

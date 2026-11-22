@@ -69,7 +69,8 @@ keep.
 four Python versions across both `manylinux2014` platforms, the four
 `manylinux_2_28` and `manylinux_2_34` platforms on Python 3.13, plus the
 nested-zip fallback, the
-multi-lambda pattern, hash stability, the guard rails, and artifact naming. It
+multi-lambda pattern, hash stability, a custom `build-dir`, the guard rails,
+and artifact naming. It
 is the only suite that proves the action works, and it costs a lot more than
 `ci.yml`.
 
@@ -126,10 +127,3 @@ edit:
 - Pin every action to a full commit SHA with a trailing `# vX.Y.Z` comment.
   Dependabot rewrites the SHA and the comment together, so the form matters.
 - `.editorconfig` covers indentation and line endings.
-
-## Known gaps
-
-Already known, so there is no need to file them - a PR is welcome:
-
-- `--build-dir` exists in `build.sh` but the action does not expose it, so a
-  project with its own `build/` directory has no way to opt out.

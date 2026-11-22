@@ -90,6 +90,13 @@ source_date_epoch_is_valid() {
   ((10#$1 >= MIN_SOURCE_DATE_EPOCH))
 }
 
+# Whether the first path is the second one or one of its parents. Both must
+# already be resolved to absolute paths: this compares strings, and does not
+# follow symlinks. The trailing slash is stripped first so that / still works.
+path_contains() {
+  [[ "$1" == "$2" || "$2" == "${1%/}"/* ]]
+}
+
 # A byte count in the nearest binary unit with one decimal place, e.g.
 # 130169 -> "127.1 KiB". For reading only, never parsed.
 format_bytes() {
@@ -148,8 +155,12 @@ Usage: ${0##*/} --input <dir> --output <dir> --python <version> --platform <plat
                completely: it is deleted, not emptied, before and after every
                build. Never point it at a directory holding anything you want
                to keep, and never share it between builds running at the same
-               time - each one deletes the other's work in progress. Defaults
-               to <input>/build, on those same terms.
+               time - each one deletes the other's work in progress. Must not
+               be, or be a parent of, the input or output directory,
+               \$RUNNER_TEMP, \$HOME or \$GITHUB_ACTION_PATH, and must not be a
+               symlink. Other symlinks in the path are followed before
+               checking. Defaults to <input>/build, on those
+               same terms.
   --packager-version
                package-python-function version to package with. Defaults to
                $DEFAULT_PACKAGER_VERSION. Earlier releases are 0.0.x with no
@@ -293,17 +304,47 @@ main() {
   [[ -f "$INPUT/pyproject.toml" ]] || die "no pyproject.toml in: $INPUT"
 
   # Resolve every path now, so the uv --directory below cannot shift them.
-  INPUT="$(cd "$INPUT" && pwd)"
-  mkdir -p "$OUTPUT"
-  OUTPUT="$(cd "$OUTPUT" && pwd)"
+  # pwd -P follows symlinks, so the build-dir checks below compare real
+  # locations: through a symlink, two different strings can name one directory.
+  INPUT="$(cd "$INPUT" && pwd -P)"
+  OUTPUT="$(mkdir -p "$OUTPUT" && cd "$OUTPUT" && pwd -P)" ||
+    fail "cannot create output-path: $OUTPUT"
 
-  mkdir -p "${BUILD_DIR:=$INPUT/build}"
-  BUILD_DIR="$(cd "$BUILD_DIR" && pwd)"
+  : "${BUILD_DIR:=$INPUT/build}"
+  # Checked before pwd -P below swaps the link for its target: cleanup would
+  # then delete the target's contents, where rm -rf on the link removes only
+  # the link. A trailing / or /. makes -L follow the link and miss it, so
+  # those are stripped first, as many times as they repeat.
+  local link_check="$BUILD_DIR"
+  while [[ "$link_check" != / && ("$link_check" == */ || "$link_check" == */.) ]]; do
+    link_check="${link_check%/}"
+    link_check="${link_check%/.}"
+  done
+  [[ ! -L "$link_check" ]] ||
+    fail "build-dir $BUILD_DIR is a symlink, so cleaning it up would delete" \
+      "the directory it points to. Point build-dir at a real directory."
+  BUILD_DIR="$(mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR" && pwd -P)" ||
+    fail "cannot create build-dir: $BUILD_DIR"
 
-  # Everything below deletes this directory, so refuse the two paths that would
-  # take the project or the finished zip down with it.
-  [[ "$BUILD_DIR" != "$INPUT" ]] || die "--build-dir must not be the input directory"
-  [[ "$BUILD_DIR" != "$OUTPUT" ]] || die "--build-dir must not be the output directory"
+  # Everything below deletes this directory, so refuse any path that would take
+  # something else down with it: the project, the finished zip, the runner's
+  # temp directory (which holds $GITHUB_OUTPUT), the home directory, or this
+  # action's own checkout. Each entry is name=path, and the directory itself
+  # counts as well as its parents.
+  local protected=("input-path=$INPUT" "output-path=$OUTPUT")
+  local var
+  for var in RUNNER_TEMP HOME GITHUB_ACTION_PATH; do
+    if [[ -d "${!var:-}" ]]; then
+      protected+=("$var=$(cd "${!var}" && pwd -P)")
+    fi
+  done
+
+  local entry
+  for entry in "${protected[@]}"; do
+    ! path_contains "$BUILD_DIR" "${entry#*=}" ||
+      fail "build-dir $BUILD_DIR is the same as or a parent of ${entry%%=*}" \
+        "${entry#*=}, so cleaning it up would delete ${entry%%=*} too."
+  done
 
   # --- pipeline ---
 
