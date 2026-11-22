@@ -256,6 +256,38 @@ jobs:
           echo "second: $SECOND"
           [[ -n "$FIRST" && "$FIRST" == "$SECOND" ]]
 
+  build-dir:
+    name: build-dir moves the scratch directory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Stands in for a project's own build/ directory, which the default
+      # build-dir would delete.
+      - name: Put a file in <input-path>/build
+        run: |
+          mkdir -p tests/fixtures/single/build
+          touch tests/fixtures/single/build/keep.txt
+
+      - name: Package with build-dir outside the project
+        id: package
+        uses: ./
+        with:
+          input-path: tests/fixtures/single
+          output-path: dist
+          build-dir: ${{ runner.temp }}/lambda-build
+          python-version: "3.13"
+          platform: aarch64-manylinux2014
+
+      - name: Assert the project's build/ was left alone and the scratch dir is gone
+        env:
+          ZIP_PATH: ${{ steps.package.outputs.zip-path }}
+          BUILD_DIR: ${{ runner.temp }}/lambda-build
+        run: |
+          test -f "$ZIP_PATH"
+          test -f tests/fixtures/single/build/keep.txt || { echo "<input-path>/build was touched"; exit 1; }
+          test ! -e "$BUILD_DIR" || { echo "build-dir was not cleaned up: $BUILD_DIR"; exit 1; }
+
   guard-rails:
     name: unsupported inputs fail fast
     runs-on: ubuntu-latest
@@ -292,16 +324,91 @@ jobs:
           python-version: "3.9"
           platform: aarch64-manylinux2014
 
-      - name: Assert all three were rejected without producing a package
+      # tests/ is a parent of input-path. Were it accepted, cleanup would
+      # delete the fixture along with it, which the assertion below checks.
+      - name: Package with build-dir set to a parent of input-path
+        id: bad-build-dir
+        continue-on-error: true
+        uses: ./
+        with:
+          input-path: tests/fixtures/single
+          # Not dist: build.sh creates the output directory before it checks
+          # build-dir, so this case cannot assert that no directory appeared.
+          output-path: dist-bad-build-dir
+          build-dir: tests
+          python-version: "3.13"
+          platform: aarch64-manylinux2014
+
+      - name: Assert all four were rejected without producing a package
         env:
           BAD_PLATFORM: ${{ steps.bad-platform.outcome }}
           BAD_PAIR: ${{ steps.bad-pair.outcome }}
           BAD_PYTHON: ${{ steps.bad-python.outcome }}
+          BAD_BUILD_DIR: ${{ steps.bad-build-dir.outcome }}
         run: |
           [[ "$BAD_PLATFORM" == "failure" ]] || { echo "an unsupported platform was accepted"; exit 1; }
           [[ "$BAD_PAIR" == "failure" ]] || { echo "python 3.11 with manylinux_2_28 was accepted"; exit 1; }
           [[ "$BAD_PYTHON" == "failure" ]] || { echo "an unsupported python-version was accepted"; exit 1; }
+          [[ "$BAD_BUILD_DIR" == "failure" ]] || { echo "a build-dir above input-path was accepted"; exit 1; }
+          test -f tests/fixtures/single/pyproject.toml || { echo "the fixture was deleted"; exit 1; }
           test ! -e dist
+          ! compgen -G 'dist-bad-build-dir/*.zip' || { echo "a package was produced"; exit 1; }
+
+      # The step outcomes above only show that a run failed, not why. These
+      # call build.sh directly, so each refusal can be checked against the
+      # path it names. They need uv on PATH: build.sh checks for its tools
+      # before it gets to build-dir.
+      - name: Install uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+
+      - name: Assert each unsafe build-dir is refused for the right reason
+        run: |
+          expect_refusal() {
+            local want="$1"
+            shift
+            if ./build.sh --input tests/fixtures/single --python 3.13 \
+              --platform aarch64-manylinux2014 "$@" 2>err.txt; then
+              echo "accepted: $*"
+              exit 1
+            fi
+            grep -qF "$want" err.txt || {
+              echo "refused for the wrong reason: $*"
+              cat err.txt
+              exit 1
+            }
+          }
+
+          expect_refusal "a parent of input-path " --output guard-out --build-dir tests/fixtures/single
+          expect_refusal "a parent of output-path " --output guard-out --build-dir guard-out
+          expect_refusal "a parent of output-path " --output guard-out/zip --build-dir guard-out
+          expect_refusal "a parent of RUNNER_TEMP " --output guard-out --build-dir "$RUNNER_TEMP"
+
+          # A symlink must not hide that the build-dir is a parent of input-path.
+          ln -s "$PWD/tests" "$RUNNER_TEMP/tests-link"
+          expect_refusal "a parent of input-path " --output guard-out --build-dir "$RUNNER_TEMP/tests-link/fixtures"
+
+          # A build-dir that is itself a symlink is refused outright: cleanup
+          # would delete what it points to, not just the link.
+          mkdir -p "$RUNNER_TEMP/shared-cache"
+          ln -s "$RUNNER_TEMP/shared-cache" "$RUNNER_TEMP/build-link"
+          expect_refusal "is a symlink" --output guard-out --build-dir "$RUNNER_TEMP/build-link"
+          # Spellings that make the symlink test follow the link, unless
+          # build.sh strips them first.
+          expect_refusal "is a symlink" --output guard-out --build-dir "$RUNNER_TEMP/build-link//"
+          expect_refusal "is a symlink" --output guard-out --build-dir "$RUNNER_TEMP/build-link/."
+
+          # The runner's real home is a parent of the workspace, so it would be
+          # refused as a parent of input-path first. A stand-in tests HOME alone.
+          mkdir -p "$RUNNER_TEMP/fake-home"
+          HOME="$RUNNER_TEMP/fake-home" \
+            expect_refusal "a parent of HOME " --output guard-out --build-dir "$RUNNER_TEMP/fake-home"
+
+          # Only an action step sets GITHUB_ACTION_PATH, so stand one up here.
+          mkdir -p "$RUNNER_TEMP/fake-action"
+          GITHUB_ACTION_PATH="$RUNNER_TEMP/fake-action" \
+            expect_refusal "a parent of GITHUB_ACTION_PATH " --output guard-out --build-dir "$RUNNER_TEMP/fake-action"
+
+          test -f tests/fixtures/single/pyproject.toml || { echo "the fixture was deleted"; exit 1; }
 
   artifact:
     # Two jobs that differ only by platform. upload-artifact errors on

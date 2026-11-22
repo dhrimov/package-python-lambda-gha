@@ -199,3 +199,35 @@ setup() {
   run format_bytes $((5 * 1024 * 1024 * 1024))
   [ "$output" = "5.0 GiB" ]
 }
+
+# --- path_contains ---
+
+@test "path_contains counts a path as containing itself" {
+  run path_contains /work/build /work/build
+  [ "$status" -eq 0 ]
+}
+
+@test "path_contains finds a child several levels down" {
+  run path_contains /work /work/services/orders
+  [ "$status" -eq 0 ]
+}
+
+@test "path_contains treats the filesystem root as containing everything" {
+  run path_contains / /work/build
+  [ "$status" -eq 0 ]
+}
+
+@test "path_contains does not match a sibling that only shares a prefix" {
+  run path_contains /work/build /work/build2
+  [ "$status" -ne 0 ]
+}
+
+@test "path_contains does not count a child as containing its parent" {
+  run path_contains /work/build /work
+  [ "$status" -ne 0 ]
+}
+
+@test "path_contains does not match unrelated paths" {
+  run path_contains /tmp/build /work/services/orders
+  [ "$status" -ne 0 ]
+}
