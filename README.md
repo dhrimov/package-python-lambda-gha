@@ -90,7 +90,7 @@ own `actions/checkout` step. `upload-artifact: true` needs nothing extra.
 |---|---|---|
 | `input-path` | `.` | Directory containing the Lambda project's `pyproject.toml`. |
 | `output-path` | `terraform` | Directory the zip is written to. Created if missing. |
-| `build-dir` | `<input-path>/build` | Scratch directory, **deleted** before and after every build. See [The build directory gets deleted](#the-build-directory-gets-deleted). |
+| `build-dir` | `<input-path>/build` | Scratch directory. It is **deleted** before and after every build - see [The build directory gets deleted](#the-build-directory-gets-deleted). |
 | `python-version` | **none - required** | Target AWS Lambda Python runtime: `3.11`, `3.12`, `3.13`, or `3.14`. |
 | `platform` | **none - required** | uv target platform: `aarch64-manylinux2014`, `x86_64-manylinux2014`, `aarch64-manylinux_2_28`, `x86_64-manylinux_2_28`, `aarch64-manylinux_2_34`, or `x86_64-manylinux_2_34`. See [`platform` and the Lambda runtime](#platform-and-the-lambda-runtime). |
 | `packager-version` | `1.0.0` | `package-python-function` version to package with. |
@@ -108,16 +108,26 @@ own `actions/checkout` step. `upload-artifact: true` needs nothing extra.
 > **deletes that whole directory** before and after every build. Anything you
 > keep there is lost.
 
-If your project already uses a `build/` directory, set `build-dir` to a path
-outside it, such as `${{ runner.temp }}/lambda-build`. A relative path is
-resolved against the workspace, the same as `input-path` and `output-path`.
-The action refuses a `build-dir` that is, or is a parent of, `input-path`,
-`output-path`, the runner's temp directory (`runner.temp` itself, not a
-directory inside it), the home directory, or the action's own checkout.
-Symlinks are followed before that check, and a `build-dir` that is itself a
-symlink is refused, because cleanup would delete what it points to. Never
-share one `build-dir` between builds running at the same time: each one
-deletes the other's work in progress.
+If your project already has a `build/` directory, point `build-dir` somewhere
+outside it, for example `${{ runner.temp }}/lambda-build`. A relative path is
+resolved against the workspace, the same way as `input-path` and
+`output-path`.
+
+So that cleanup doesn't take anything else with it, the action refuses a
+`build-dir` that is, or contains:
+
+- `input-path` or `output-path`
+- the runner's temp directory - `runner.temp` itself, a directory inside it is
+  fine
+- the home directory
+- the action's own checkout
+
+It also refuses a `build-dir` that is itself a symlink, because cleanup would
+delete what the link points to. Symlinks further up the path are fine - they
+are followed before the check.
+
+Be aware that two builds running at the same time must never share one
+`build-dir`: each one deletes the other's work in progress.
 
 ### `python-version` and `platform` have no defaults on purpose
 

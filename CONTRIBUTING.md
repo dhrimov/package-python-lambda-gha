@@ -68,9 +68,8 @@ keep.
 `.github/workflows/e2e.yml` runs the action against the fixtures in `tests/`:
 four Python versions across both `manylinux2014` platforms, the four
 `manylinux_2_28` and `manylinux_2_34` platforms on Python 3.13, plus the
-nested-zip fallback, the
-multi-lambda pattern, hash stability, a custom `build-dir`, the guard rails,
-and artifact naming. It
+nested-zip fallback, the multi-lambda pattern, hash stability, a custom
+`build-dir`, the guard rails, and artifact naming. It
 is the only suite that proves the action works, and it costs a lot more than
 `ci.yml`.
 

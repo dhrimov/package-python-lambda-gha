@@ -155,12 +155,11 @@ Usage: ${0##*/} --input <dir> --output <dir> --python <version> --platform <plat
                completely: it is deleted, not emptied, before and after every
                build. Never point it at a directory holding anything you want
                to keep, and never share it between builds running at the same
-               time - each one deletes the other's work in progress. Must not
-               be, or be a parent of, the input or output directory,
-               \$RUNNER_TEMP, \$HOME or \$GITHUB_ACTION_PATH, and must not be a
-               symlink. Other symlinks in the path are followed before
-               checking. Defaults to <input>/build, on those
-               same terms.
+               time - each one deletes the other's work in progress. It can't
+               be a symlink, and it can't be or contain the input or output
+               directory, \$RUNNER_TEMP, \$HOME or \$GITHUB_ACTION_PATH.
+               Symlinks further up the path are followed before that check.
+               Defaults to <input>/build, on the same terms.
   --packager-version
                package-python-function version to package with. Defaults to
                $DEFAULT_PACKAGER_VERSION. Earlier releases are 0.0.x with no

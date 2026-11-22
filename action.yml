@@ -18,13 +18,12 @@ inputs:
     # be relative to the workspace, not to input-path. Empty is passed through
     # as-is, and build.sh fills in <input-path>/build.
     description: >-
-      Scratch directory for intermediates. The whole directory is deleted
-      before and after every build, so never point it at anything you want
-      to keep. A relative path is resolved against the workspace, like
-      input-path and output-path. Must not be, or be a parent of, input-path,
-      output-path, the runner's temp directory, the home directory or this
-      action's checkout, and must not be a symlink. Empty means
-      <input-path>/build.
+      Scratch directory for intermediate build files. The whole directory is
+      deleted before and after every build, so never point it at anything you
+      want to keep. A relative path is resolved against the workspace, like
+      input-path and output-path. It can't be a symlink, and it can't be or
+      contain input-path, output-path, the runner's temp directory, the home
+      directory or this action's checkout. Empty means <input-path>/build.
     default: ""
   python-version:
     # GitHub does not enforce `required` on composite inputs, so this line is
