@@ -327,7 +327,9 @@ main() {
   [[ ! -L "$link_check" ]] ||
     fail "build-dir $BUILD_DIR is a symlink, so cleaning it up would delete" \
       "the directory it points to. Point build-dir at a real directory."
-  resolved="$(mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR" && pwd -P)" ||
+  # cd -P, not plain cd: plain cd collapses .. by text, so hop/../build could
+  # land somewhere other than the directory -L and mkdir just looked at.
+  resolved="$(mkdir -p "$BUILD_DIR" && cd -P "$BUILD_DIR" && pwd -P)" ||
     fail "cannot create build-dir: $BUILD_DIR"
   BUILD_DIR="$resolved"
 
