@@ -304,13 +304,16 @@ main() {
   [[ -f "$INPUT/pyproject.toml" ]] || die "no pyproject.toml in: $INPUT"
 
   # Resolve every path now, so the uv --directory below cannot shift them.
-  # pwd -P follows symlinks, so the build-dir checks below compare real
-  # locations: through a symlink, two different strings can name one directory.
+  # Every path is resolved with cd -P and pwd -P, so the build-dir checks below
+  # compare real locations: through a symlink, two different strings can name
+  # one directory. Plain cd is not enough, because it collapses .. by text:
+  # with hop -> /real/child, it turns hop/../x into ./x, while the filesystem
+  # checks (-f, -L, mkdir) look at /real/x.
   # The two that may need creating go through $resolved, so a failure still
   # has the path the caller asked for to report.
-  INPUT="$(cd "$INPUT" && pwd -P)"
+  INPUT="$(cd -P "$INPUT" && pwd -P)"
   local resolved
-  resolved="$(mkdir -p "$OUTPUT" && cd "$OUTPUT" && pwd -P)" ||
+  resolved="$(mkdir -p "$OUTPUT" && cd -P "$OUTPUT" && pwd -P)" ||
     fail "cannot create output-path: $OUTPUT"
   OUTPUT="$resolved"
 
@@ -327,8 +330,6 @@ main() {
   [[ ! -L "$link_check" ]] ||
     fail "build-dir $BUILD_DIR is a symlink, so cleaning it up would delete" \
       "the directory it points to. Point build-dir at a real directory."
-  # cd -P, not plain cd: plain cd collapses .. by text, so hop/../build could
-  # land somewhere other than the directory -L and mkdir just looked at.
   resolved="$(mkdir -p "$BUILD_DIR" && cd -P "$BUILD_DIR" && pwd -P)" ||
     fail "cannot create build-dir: $BUILD_DIR"
   BUILD_DIR="$resolved"
@@ -342,7 +343,7 @@ main() {
   local var
   for var in RUNNER_TEMP HOME GITHUB_ACTION_PATH; do
     if [[ -d "${!var:-}" ]]; then
-      protected+=("$var=$(cd "${!var}" && pwd -P)")
+      protected+=("$var=$(cd -P "${!var}" && pwd -P)")
     fi
   done
 
