@@ -223,6 +223,141 @@ jobs:
           test -f "$ORDERS_ZIP"
           test -f "$PAYMENTS_ZIP"
 
+  workspace:
+    # The uv workspace pattern: one root uv.lock, a shared local library, and
+    # input-path pointed at each member. It runs on both platforms, because the
+    # shared library's compiled dependency has to match the target too. Each
+    # member is packaged twice to check that the hash stays the same when local
+    # wheels are built along the way.
+    name: workspace (python 3.13, ${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [aarch64-manylinux2014, x86_64-manylinux2014]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Package the orders member
+        id: orders
+        uses: ./
+        with:
+          input-path: tests/fixtures/workspace/lambdas/orders
+          output-path: dist
+          python-version: "3.13"
+          platform: ${{ matrix.platform }}
+
+      - name: Package the orders member again
+        id: orders-again
+        uses: ./
+        with:
+          input-path: tests/fixtures/workspace/lambdas/orders
+          output-path: dist
+          python-version: "3.13"
+          platform: ${{ matrix.platform }}
+
+      - name: Package the payments member
+        id: payments
+        uses: ./
+        with:
+          input-path: tests/fixtures/workspace/lambdas/payments
+          output-path: dist
+          python-version: "3.13"
+          platform: ${{ matrix.platform }}
+
+      - name: Package the payments member again
+        id: payments-again
+        uses: ./
+        with:
+          input-path: tests/fixtures/workspace/lambdas/payments
+          output-path: dist
+          python-version: "3.13"
+          platform: ${{ matrix.platform }}
+
+      # markupsafe is a dependency of orders only. If it is missing from the
+      # payments zip, each member got only its own dependencies. orjson comes
+      # in through the shared library, so it is in both zips. So is textutil,
+      # a path dependency of the library that is not a workspace member.
+      - name: Assert each zip holds its member, the shared library and only its own dependencies
+        env:
+          ORDERS_ZIP: ${{ steps.orders.outputs.zip-path }}
+          PAYMENTS_ZIP: ${{ steps.payments.outputs.zip-path }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          suffix="cpython-313-${PLATFORM%%-*}-linux-gnu.so"
+          expect() {
+            unzip -Z1 "$1" | grep -qxF "$2" || {
+              echo "expected $2 in $1, got:"
+              unzip -l "$1"
+              exit 1
+            }
+          }
+
+          expect "$ORDERS_ZIP" orders_lambda/handler.py
+          expect "$ORDERS_ZIP" common/__init__.py
+          expect "$ORDERS_ZIP" textutil/__init__.py
+          expect "$ORDERS_ZIP" "orjson/orjson.$suffix"
+          expect "$ORDERS_ZIP" "markupsafe/_speedups.$suffix"
+
+          expect "$PAYMENTS_ZIP" payments_lambda/handler.py
+          expect "$PAYMENTS_ZIP" common/__init__.py
+          expect "$PAYMENTS_ZIP" textutil/__init__.py
+          expect "$PAYMENTS_ZIP" "orjson/orjson.$suffix"
+          if unzip -Z1 "$PAYMENTS_ZIP" | grep -q '^markupsafe/'; then
+            echo "the payments zip carries the orders member's markupsafe:"
+            unzip -l "$PAYMENTS_ZIP"
+            exit 1
+          fi
+
+      - name: Assert both runs of each member report the same hash
+        env:
+          ORDERS: ${{ steps.orders.outputs.zip-sha256 }}
+          ORDERS_AGAIN: ${{ steps.orders-again.outputs.zip-sha256 }}
+          PAYMENTS: ${{ steps.payments.outputs.zip-sha256 }}
+          PAYMENTS_AGAIN: ${{ steps.payments-again.outputs.zip-sha256 }}
+        run: |
+          echo "orders:   $ORDERS $ORDERS_AGAIN"
+          echo "payments: $PAYMENTS $PAYMENTS_AGAIN"
+          [[ -n "$ORDERS" && "$ORDERS" == "$ORDERS_AGAIN" ]]
+          [[ -n "$PAYMENTS" && "$PAYMENTS" == "$PAYMENTS_AGAIN" ]]
+
+  uv-floor:
+    # Runs the oldest uv the action supports on the fixture that uses the most
+    # of it. One platform is enough: this checks that the commands and flags
+    # exist, not the packaging matrix. The matrix has one value so the version
+    # is written only once here. tests/build.bats checks that it matches
+    # MIN_UV_VERSION.
+    name: workspace on the uv floor (uv ${{ matrix.uv-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        uv-version: ["0.10.0"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Package the orders member with uv ${{ matrix.uv-version }}
+        id: package
+        uses: ./
+        with:
+          input-path: tests/fixtures/workspace/lambdas/orders
+          output-path: dist
+          python-version: "3.13"
+          platform: aarch64-manylinux2014
+          uv-version: ${{ matrix.uv-version }}
+
+      - name: Assert the build ran on uv ${{ matrix.uv-version }} and packaged the shared library
+        env:
+          ZIP_PATH: ${{ steps.package.outputs.zip-path }}
+          UV_FLOOR: ${{ matrix.uv-version }}
+        run: |
+          uv --version
+          [[ "$(uv --version | cut -d' ' -f2)" == "$UV_FLOOR" ]] || { echo "not on uv $UV_FLOOR"; exit 1; }
+          unzip -Z1 "$ZIP_PATH" | grep -qxF common/__init__.py || {
+            echo "expected common/__init__.py in the package, got:"
+            unzip -l "$ZIP_PATH"
+            exit 1
+          }
+
   reproducible:
     name: the same inputs give the same hash
     runs-on: ubuntu-latest

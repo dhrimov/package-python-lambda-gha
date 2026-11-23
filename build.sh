@@ -4,10 +4,11 @@
 #
 #   build.sh --input <dir> --output <dir> --python <version> --platform <platform>
 #
-# Builds the project as a wheel, installs it together with its locked
-# dependencies into a throwaway venv built for the Lambda platform, and hands
-# that venv to package-python-function, which writes a reproducible zip named
-# after the project.
+# Builds the project as a wheel, plus a wheel for each local package it depends
+# on - uv workspace members and path dependencies. Installs them with
+# the locked third-party dependencies into a throwaway venv built for the
+# Lambda platform. Then hands that venv to package-python-function, which
+# writes a reproducible zip named after the project.
 #
 # Everything that talks to GitHub Actions lives here rather than in action.yml:
 # the runner guard, the input checks, the collapsible ::group:: sections,
@@ -32,6 +33,10 @@ MIN_SOURCE_DATE_EPOCH=315532800
 # AWS's Lambda runtimes docs. There is no API to ask for the supported set, so
 # this list needs an edit whenever AWS adds a version.
 SUPPORTED_PYTHON_VERSIONS="3.11 3.12 3.13 3.14"
+
+# The oldest uv that has every command and flag the pipeline uses. The newest
+# one is `uv workspace dir`, stable since 0.10.0.
+MIN_UV_VERSION="0.10.0"
 
 # --- pure helpers -----------------------------------------------------------
 #
@@ -90,6 +95,86 @@ source_date_epoch_is_valid() {
   ((10#$1 >= MIN_SOURCE_DATE_EPOCH))
 }
 
+# Whether the output of `uv --version` names MIN_UV_VERSION or newer. Only the
+# second field is read, so a build note after it, like Homebrew's, is ignored.
+# Only the three numbers are compared, so a pre-release suffix is ignored too.
+uv_version_is_supported() {
+  local version
+  read -r _ version _ <<<"$1"
+  [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1
+  local have=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+
+  local want
+  IFS=. read -r -a want <<<"$MIN_UV_VERSION"
+
+  local i
+  for i in 0 1 2; do
+    ((10#${have[i]} > 10#${want[i]})) && return 0
+    ((10#${have[i]} < 10#${want[i]})) && return 1
+  done
+  return 0
+}
+
+# A third-party line in a uv export: a name, optional extras, then a pinned
+# version or a direct URL, with an optional marker after it.
+THIRD_PARTY_LINE='^[A-Za-z0-9][A-Za-z0-9._-]*(\[[^]]*\])?(==| @ )'
+
+# Prints the local packages in a closure export (uv export --no-emit-project
+# --no-hashes), one per line, with each path relative to the workspace root as
+# uv wrote it. uv writes a local package as a bare path, so a line that is
+# . or .., or starts with ./ or ../, is one, and the whole line is the path,
+# spaces included. A bare . is the workspace root's own package. Third-party lines, comments, options and blank lines are skipped.
+#
+# On failure it prints only the reason and returns 1, so the caller can pass
+# that to fail. It fails on local packages the pipeline can't build into a
+# wheel and install: an editable one, a path with an environment marker, an
+# absolute path (uv writes those as file:// URLs), and a .whl file. It also
+# fails on any line it does not recognise. That way a change in uv's export
+# format stops the build here instead of quietly leaving a local package out.
+local_package_paths() {
+  local line seen found=()
+  while IFS= read -r line; do
+    if [[ -z "${line//[[:space:]]/}" || "$line" =~ ^[[:space:]]*# ]]; then
+      continue
+    fi
+    case "$line" in
+      -e\ * | --editable*)
+        printf 'editable local dependency is not supported: %s' "$line"
+        return 1
+        ;;
+      -*) continue ;;
+      file://* | *" @ file://"*)
+        printf 'local dependency with an absolute path is not supported: %s. %s' \
+          "$line" "Make it a path relative to the workspace root."
+        return 1
+        ;;
+      . | .. | ./* | ../*) ;;
+      *)
+        [[ "$line" =~ $THIRD_PARTY_LINE ]] && continue
+        printf 'line in the uv export output not recognised: %s' "$line"
+        return 1
+        ;;
+    esac
+    if [[ "$line" == *" ;"* ]]; then
+      printf 'local dependency with an environment marker is not supported: %s' "$line"
+      return 1
+    fi
+    if [[ "$line" == *.whl ]]; then
+      printf 'local dependency on a .whl file is not supported: %s' "$line"
+      return 1
+    fi
+
+    for seen in ${found[@]+"${found[@]}"}; do
+      [[ "$seen" != "$line" ]] || continue 2
+    done
+    found+=("$line")
+  done <<<"$1"
+
+  if ((${#found[@]} > 0)); then
+    printf '%s\n' "${found[@]}"
+  fi
+}
+
 # Whether the first path is the second one or one of its parents. Both must
 # already be resolved to absolute paths: this compares strings, and does not
 # follow symlinks. The trailing slash is stripped first so that / still works.
@@ -123,13 +208,18 @@ log() {
   printf '\n==> %s\n' "$*"
 }
 
-# Pipeline stages become collapsible sections in the Actions log.
+# Pipeline stages become collapsible sections in the Actions log. IN_GROUP
+# lets fail and die close an open section before they print the error.
+IN_GROUP=false
+
 group() {
   printf '\n::group::%s\n' "$*"
+  IN_GROUP=true
 }
 
 endgroup() {
   printf '::endgroup::\n'
+  IN_GROUP=false
 }
 
 warn() {
@@ -178,17 +268,26 @@ Example:
 EOF
 }
 
-# A usage error: the caller passed the wrong flags.
+# A usage error: the caller passed the wrong flags. Any open log section is
+# closed first, as in fail.
 die() {
+  if [[ "$IN_GROUP" == true ]]; then
+    endgroup
+  fi
   echo "error: $*" >&2
   usage >&2
   exit 1
 }
 
 # A validation error: the flags parse, but the build they ask for cannot work.
-# Annotated so it shows up on the Actions job summary and not only in the log,
-# and raised before any uv/uvx work starts.
+# Annotated so it shows up on the Actions job summary and not only in the log.
+# The guard rails raise it before any uv work starts. The pipeline steps also
+# raise it, for checks where uv does not annotate the failure itself. Any open
+# log section is closed first, so the error is not hidden inside it.
 fail() {
+  if [[ "$IN_GROUP" == true ]]; then
+    endgroup
+  fi
   printf '::error::%s\n' "$*" >&2
   exit 1
 }
@@ -359,38 +458,116 @@ main() {
   clean_build_dir
   mkdir -p "$BUILD_DIR"
 
-  group "[1/5] exporting locked dependencies"
-  uv export \
+  group "[1/9] checking uv version"
+  local uv_version
+  uv_version="$(uv --version)"
+  echo "$uv_version"
+  uv_version_is_supported "$uv_version" ||
+    fail "this action needs uv $MIN_UV_VERSION or newer, but uv --version says: $uv_version." \
+      "Set uv-version to $MIN_UV_VERSION or later, or update the uv pin at the repo root."
+  endgroup
+
+  # The exports below use --frozen, so they read uv.lock as it is. This step
+  # fails first on a lock that no longer matches pyproject.toml. It only needs
+  # the network to re-resolve, and it only re-resolves when the lock is stale.
+  group "[2/9] checking uv.lock is up to date"
+  uv lock --directory "$INPUT" --check ||
+    fail "uv lock --check failed for $INPUT - see uv's message above. If uv.lock" \
+      "is out of date with pyproject.toml, run uv lock at the workspace root and" \
+      "commit the result."
+  endgroup
+
+  # A local package - a workspace member or a plain path dependency - can't go
+  # in the requirements file as a path. uv writes the path relative to the
+  # workspace root, but uv pip install reads it relative to the current
+  # directory. So each local package is built into a wheel next to the
+  # project's own, and the requirements export leaves them all out.
+  group "[3/9] listing local packages"
+  local closure locals_text path
+  closure="$(uv export \
     --directory "$INPUT" \
     --frozen \
     --no-dev \
     --no-editable \
     --no-emit-project \
+    --no-hashes)"
+  if ! locals_text="$(local_package_paths "$closure")"; then
+    fail "$locals_text"
+  fi
+  local locals=()
+  while IFS= read -r path; do
+    if [[ -n "$path" ]]; then
+      locals+=("$path")
+    fi
+  done <<<"$locals_text"
+  if ((${#locals[@]} == 0)); then
+    echo "none"
+  else
+    printf '%s\n' "${locals[@]}"
+  fi
+  endgroup
+
+  # Built by path and not with --package, so a path dependency that is not a
+  # workspace member gets built too. The paths are relative to the workspace
+  # root, so uv build runs from there.
+  group "[4/9] building local package wheels"
+  if ((${#locals[@]} == 0)); then
+    echo "no local packages to build"
+  else
+    local root
+    root="$(uv workspace dir --directory "$INPUT")"
+    for path in "${locals[@]}"; do
+      uv build --directory "$root" --wheel -o "$BUILD_DIR/dist" "$path"
+    done
+  fi
+  endgroup
+
+  # --no-emit-local also leaves out the project itself, since it is local too.
+  # --no-emit-workspace is not enough: it keeps a path dependency that is not
+  # a workspace member, and the install step then fails on it.
+  group "[5/9] exporting locked third-party dependencies"
+  uv export \
+    --directory "$INPUT" \
+    --frozen \
+    --no-dev \
+    --no-editable \
+    --no-emit-local \
     -o "$BUILD_DIR/requirements.txt"
   endgroup
 
-  group "[2/5] building wheel"
+  group "[6/9] building wheel"
   uv build --directory "$INPUT" --wheel -o "$BUILD_DIR/dist"
   endgroup
 
-  group "[3/5] creating venv (python $PYTHON_VERSION)"
+  group "[7/9] creating venv (python $PYTHON_VERSION)"
   uv venv --python "$PYTHON_VERSION" "$BUILD_DIR/venv"
   endgroup
 
-  group "[4/5] installing wheel and dependencies for $PLATFORM ($architecture)"
+  # With --no-deps, uv installs only what is listed: the wheels and the locked
+  # requirements, and nothing extra from an index. --no-deps also turns off the
+  # dependency check, so uv pip check does it instead. With --python-platform it
+  # reads markers for the target platform, not for the runner.
+  group "[8/9] installing wheels and dependencies for $PLATFORM ($architecture)"
   uv pip install \
     --python "$BUILD_DIR/venv/bin/python" \
     --python-platform "$PLATFORM" \
     --only-binary=:all: \
     --no-installer-metadata \
     --no-compile-bytecode \
+    --no-deps \
     "$BUILD_DIR"/dist/*.whl \
     -r "$BUILD_DIR/requirements.txt"
+  uv pip check \
+    --python "$BUILD_DIR/venv/bin/python" \
+    --python-platform "$PLATFORM" ||
+    fail "uv pip check found missing or conflicting dependencies for $PLATFORM -" \
+      "see uv's message above. The install uses --no-deps, so every dependency" \
+      "has to come from uv.lock or from a local package wheel."
   endgroup
 
   local report="$BUILD_DIR/report.json"
 
-  group "[5/5] packaging"
+  group "[9/9] packaging"
   uvx "package-python-function@$PACKAGER_VERSION" \
     "$BUILD_DIR/venv" \
     --project "$INPUT/pyproject.toml" \

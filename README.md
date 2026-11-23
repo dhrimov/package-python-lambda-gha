@@ -64,6 +64,55 @@ jobs:
           upload-artifact: "true"
 ```
 
+#### A uv workspace
+
+The same matrix works for a
+[uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/) with
+one `uv.lock` at the root. Here is the same job, with `input-path` pointed at
+each lambda:
+
+```yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        lambda: [orders, payments]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dhrimov/package-python-lambda-gha@v1
+        with:
+          input-path: lambdas/${{ matrix.lambda }}
+          output-path: dist
+          python-version: "3.13"
+          platform: aarch64-manylinux2014
+```
+
+Two layouts are supported:
+
+- A virtual root (a root `pyproject.toml` with no `[project]` table), with each
+  lambda as a member. `input-path` is the member's directory.
+- The layout in
+  [uv's AWS Lambda guide](https://docs.astral.sh/uv/guides/integration/aws-lambda/),
+  where the root is the lambda and the shared library is a member.
+  `input-path` is the root.
+
+The zip holds the lambda's own code and every local package it depends on -
+workspace members and path dependencies, including the ones it only gets
+through another local package. On top of that, it holds the third-party
+dependencies those packages need and nothing else, so another member's
+dependencies stay out.
+
+This is a bit different from uv's guide. Its Docker workspace example installs
+the library straight from its path. The action builds every local package into
+a wheel first and keeps `--only-binary=:all:` on, so third-party packages only
+come from wheels and are never built on the runner.
+
+What is not supported:
+
+- A virtual root can't be `input-path`: there is no project there to package.
+- Absolute path dependencies and `.whl` path dependencies are refused.
+- Local dependencies with an environment marker are refused.
+
 ### Pinning
 
 The safer form pins the action to a full commit SHA and keeps the version in a
@@ -94,8 +143,8 @@ own `actions/checkout` step. `upload-artifact: true` needs nothing extra.
 | `python-version` | **none - required** | Target AWS Lambda Python runtime: `3.11`, `3.12`, `3.13`, or `3.14`. |
 | `platform` | **none - required** | uv target platform: `aarch64-manylinux2014`, `x86_64-manylinux2014`, `aarch64-manylinux_2_28`, `x86_64-manylinux_2_28`, `aarch64-manylinux_2_34`, or `x86_64-manylinux_2_34`. See [`platform` and the Lambda runtime](#platform-and-the-lambda-runtime). |
 | `packager-version` | `1.0.0` | `package-python-function` version to package with. |
-| `uv-version` | `""` | uv version to install. Empty means the version pinned in your project, or the latest release. |
-| `enable-cache` | `true` | Turn on uv's Actions cache, keyed off `<input-path>/uv.lock`. |
+| `uv-version` | `""` | uv version to install, `0.10.0` or later. Empty means the version pinned at the repo root (`GITHUB_WORKSPACE`), or the latest release if there is no pin. A pin in `input-path` is not read. |
+| `enable-cache` | `true` | Turn on uv's Actions cache, keyed off the nearest `uv.lock` at or above `input-path`. |
 | `fail-on-non-linux` | `true` | Refuse to run on a non-Linux runner. |
 | `upload-artifact` | `false` | Upload the zip as a workflow artifact. |
 | `artifact-name` | derived | Artifact name. See [Artifacts](#artifacts). |
@@ -181,7 +230,7 @@ the built venv, never imports them.
 | Output | Description |
 |---|---|
 | `zip-path` | **Absolute** path to the zip on the runner. Pass it to Terraform unchanged. |
-| `zip-sha256` | SHA-256 of the zip. The same inputs give you the same hash, so you can skip redeploying an unchanged function. |
+| `zip-sha256` | SHA-256 of the zip. The same inputs give you the same hash, so you can skip redeploying an unchanged function. Be aware that the hash also changes with the uv version, because each wheel's metadata names the uv version that built it. Pin `uv-version` if you need the hash to stay the same. |
 | `package-size-bytes` | Size of the zip on disk. |
 | `uncompressed-bytes` | Unzipped size - **this** is the figure AWS's 250 MiB deployment package limit applies to, not `package-size-bytes`. |
 | `nested-zip` | `true` when the packager's >250 MiB fallback kicked in and nested the dependencies in an inner zip. |
