@@ -121,9 +121,9 @@ THIRD_PARTY_LINE='^[A-Za-z0-9][A-Za-z0-9._-]*(\[[^]]*\])?(==| @ )'
 
 # Prints the local packages in a closure export (uv export --no-emit-project
 # --no-hashes), one per line, with each path relative to the workspace root as
-# uv wrote it. uv writes a local package as a bare path, so any line that
-# starts with ./ or ../ is one, and the whole line is the path, spaces
-# included. Third-party lines, comments, options and blank lines are skipped.
+# uv wrote it. uv writes a local package as a bare path, so a line that is
+# . or .., or starts with ./ or ../, is one, and the whole line is the path,
+# spaces included. A bare . is the workspace root's own package. Third-party lines, comments, options and blank lines are skipped.
 #
 # On failure it prints only the reason and returns 1, so the caller can pass
 # that to fail. It fails on local packages the pipeline can't build into a
@@ -148,7 +148,7 @@ local_package_paths() {
           "$line" "Make it a path relative to the workspace root."
         return 1
         ;;
-      ./* | ../*) ;;
+      . | .. | ./* | ../*) ;;
       *)
         [[ "$line" =~ $THIRD_PARTY_LINE ]] && continue
         printf 'line in the uv export output not recognised: %s' "$line"

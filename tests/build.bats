@@ -295,6 +295,18 @@ setup() {
   [ "$output" = "./libs/common" ]
 }
 
+@test "local_package_paths finds the workspace root's package as a bare ." {
+  run local_package_paths "$(printf '%s\n' '.' '    # via member' 'orjson==3.12.0')"
+  [ "$status" -eq 0 ]
+  [ "$output" = "." ]
+}
+
+@test "local_package_paths finds a path dependency on the parent as a bare .." {
+  run local_package_paths "$(printf '%s\n' '..' '    # via app' 'orjson==3.12.0')"
+  [ "$status" -eq 0 ]
+  [ "$output" = ".." ]
+}
+
 @test "local_package_paths finds transitive local packages, in export order" {
   run local_package_paths "$(printf '%s\n' \
     './libs/common' \
