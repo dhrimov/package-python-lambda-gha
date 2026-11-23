@@ -123,6 +123,9 @@ lives in more than one place. All of these need the edit:
 - `tests/build.bats`, where the rejected-version cases name the versions either
   side of the supported set
 
+`tests/build.bats` fails if `action.yml`, `README.md` or the e2e matrix don't
+match `SUPPORTED_PYTHON_VERSIONS`.
+
 A newly deprecated runtime also needs a date in
 `python_version_deprecation_date`, which is what turns its build-time
 `::warning::` on. Those dates are hand-written too, from AWS docs.
@@ -132,14 +135,18 @@ A newly deprecated runtime also needs a date in
 The platform list lives in more than one place too. All of these need the
 edit:
 
-- `platform_architecture` in `build.sh`, and `platform_supports_python` if
-  the platform's glibc level is newer than some supported runtime can load
-- `usage()` and the unsupported-platform `fail` message in `build.sh`
+- `SUPPORTED_PLATFORMS` in `build.sh`, `platform_architecture` if the
+  platform has a new CPU architecture, and `platform_supports_python` if the
+  platform's glibc level is newer than some supported runtime can load
+- `usage()` in `build.sh`
 - the `platform` description in `action.yml`
 - the inputs table and the "`platform` and the Lambda runtime" section in
   `README.md`
 - the `newer-glibc` matrix in `.github/workflows/e2e.yml`
 - `tests/build.bats`
+
+`tests/build.bats` fails if `usage()`, `action.yml`, the `README.md` inputs
+table or the e2e matrices don't match `SUPPORTED_PLATFORMS`.
 
 ## House rules
 

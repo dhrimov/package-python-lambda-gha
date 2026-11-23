@@ -61,6 +61,19 @@ setup() {
   [ "$status" -ne 0 ]
 }
 
+@test "platform_architecture rejects two platforms in one value" {
+  run platform_architecture "aarch64-manylinux2014 x86_64-manylinux2014"
+  [ "$status" -ne 0 ]
+}
+
+@test "platform_architecture maps every supported platform" {
+  for platform in $SUPPORTED_PLATFORMS; do
+    run platform_architecture "$platform"
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+  done
+}
+
 # --- platform_supports_python ---
 
 @test "platform_supports_python rejects 3.11 with every newer-glibc platform" {
@@ -107,6 +120,11 @@ setup() {
 
 @test "python_version_runtime rejects a patch version" {
   run python_version_runtime 3.13.1
+  [ "$status" -ne 0 ]
+}
+
+@test "python_version_runtime rejects two versions in one value" {
+  run python_version_runtime "3.12 3.13"
   [ "$status" -ne 0 ]
 }
 
@@ -440,4 +458,42 @@ setup() {
   grep -qF "uv version to install, $MIN_UV_VERSION or later." "$root/action.yml"
   grep -qF "uv version to install, \`$MIN_UV_VERSION\` or later." "$root/README.md"
   grep -qF "uv-version: [\"$MIN_UV_VERSION\"]" "$root/.github/workflows/e2e.yml"
+}
+
+# --- the supported runtimes and platforms in the docs and the e2e suite ---
+
+# Joins the words of $1 the way the README does: `a`, `b`, or `c`.
+readme_list() {
+  local item list="" last="${1##* }"
+  for item in $1; do
+    if [[ "$item" == "$last" ]]; then
+      list+="or \`$item\`"
+    else
+      list+="\`$item\`, "
+    fi
+  done
+  printf '%s' "$list"
+}
+
+@test "the Python versions in action.yml, README.md and the e2e suite match SUPPORTED_PYTHON_VERSIONS" {
+  local root="$BATS_TEST_DIRNAME/.."
+  local quoted="\"${SUPPORTED_PYTHON_VERSIONS// /\", \"}\""
+  grep -qF "one of ${SUPPORTED_PYTHON_VERSIONS// /, }." "$root/action.yml"
+  grep -qF "Target AWS Lambda Python runtime: $(readme_list "$SUPPORTED_PYTHON_VERSIONS")." "$root/README.md"
+  grep -qF "\`${SUPPORTED_PYTHON_VERSIONS// /\`, \`}\`. Anything else fails." "$root/README.md"
+  grep -qF "python-version: [$quoted]" "$root/.github/workflows/e2e.yml"
+}
+
+@test "the platforms in action.yml, README.md, usage and the e2e suite match SUPPORTED_PLATFORMS" {
+  local root="$BATS_TEST_DIRNAME/.."
+  # The action.yml description is folded over several lines.
+  tr -s ' \n' ' ' <"$root/action.yml" |
+    grep -qF "uv target platform, one of ${SUPPORTED_PLATFORMS// /, }."
+  grep -qF "uv target platform: $(readme_list "$SUPPORTED_PLATFORMS")." "$root/README.md"
+  local usage_text platform
+  usage_text="$(usage)"
+  for platform in $SUPPORTED_PLATFORMS; do
+    grep -qF "$platform" <<<"$usage_text"
+    grep -qE "^ +- $platform\$|platform: \[(.*, )?$platform(, .*)?\]" "$root/.github/workflows/e2e.yml"
+  done
 }

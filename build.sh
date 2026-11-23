@@ -10,11 +10,14 @@
 # Lambda platform. Then hands that venv to package-python-function, which
 # writes a reproducible zip named after the project.
 #
-# Everything that talks to GitHub Actions lives here rather than in action.yml:
-# the runner guard, the input checks, the collapsible ::group:: sections,
-# and the $GITHUB_OUTPUT writes. Sourcing this file defines its functions
-# without running the pipeline, which is how the bats suite tests the pure
-# helpers below.
+# Most of the GitHub Actions work lives here, not in action.yml: the runner
+# guard, the input checks, the collapsible ::group:: sections and the zip's
+# $GITHUB_OUTPUT writes. action.yml only has the steps around the build - the
+# cache glob, the boolean input checks and the artifact name - and those
+# write their own outputs and annotations.
+#
+# Sourcing this file defines its functions without running the pipeline,
+# which is how the bats suite tests the pure helpers below.
 
 set -euo pipefail
 
@@ -34,6 +37,10 @@ MIN_SOURCE_DATE_EPOCH=315532800
 # this list needs an edit whenever AWS adds a version.
 SUPPORTED_PYTHON_VERSIONS="3.11 3.12 3.13 3.14"
 
+# The uv target platforms this action supports. platform_architecture maps
+# each one to its Lambda CPU architecture.
+SUPPORTED_PLATFORMS="aarch64-manylinux2014 x86_64-manylinux2014 aarch64-manylinux_2_28 x86_64-manylinux_2_28 aarch64-manylinux_2_34 x86_64-manylinux_2_34"
+
 # The oldest uv that has every command and flag the pipeline uses. The newest
 # one is `uv workspace dir`, stable since 0.10.0.
 MIN_UV_VERSION="0.10.0"
@@ -43,14 +50,21 @@ MIN_UV_VERSION="0.10.0"
 # Everything in this section depends only on its arguments, so the bats suite
 # can source this file and call it directly.
 
-# The Lambda CPU architecture a uv target platform builds for. Doubles as the
-# platform allow-list: an unsupported platform has no architecture to name.
+# The Lambda CPU architecture a uv target platform builds for. Fails for any
+# platform outside SUPPORTED_PLATFORMS. The match is exact, so a value with
+# two platforms in it fails.
 platform_architecture() {
-  case "$1" in
-    aarch64-manylinux2014 | aarch64-manylinux_2_28 | aarch64-manylinux_2_34) printf 'arm64' ;;
-    x86_64-manylinux2014 | x86_64-manylinux_2_28 | x86_64-manylinux_2_34) printf 'x86_64' ;;
-    *) return 1 ;;
-  esac
+  local platform
+  for platform in $SUPPORTED_PLATFORMS; do
+    [[ "$1" == "$platform" ]] || continue
+    case "$1" in
+      aarch64-*) printf 'arm64' ;;
+      x86_64-*) printf 'x86_64' ;;
+      *) return 1 ;;
+    esac
+    return 0
+  done
+  return 1
 }
 
 # Whether a target Python version's Lambda runtime can load wheels built for a
@@ -66,12 +80,17 @@ platform_supports_python() {
 }
 
 # The AWS Lambda runtime identifier for a target Python version, e.g.
-# 3.13 -> python3.13. Fails for any version outside the supported set.
+# 3.13 -> python3.13. Fails for any version outside the supported set. The
+# match is exact, so a value with two versions in it fails.
 python_version_runtime() {
-  case " $SUPPORTED_PYTHON_VERSIONS " in
-    *" $1 "*) printf 'python%s' "$1" ;;
-    *) return 1 ;;
-  esac
+  local version
+  for version in $SUPPORTED_PYTHON_VERSIONS; do
+    if [[ "$1" == "$version" ]]; then
+      printf 'python%s' "$1"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # The date AWS retires a runtime that still works but is on its way out, or
@@ -311,7 +330,7 @@ main() {
   PYTHON_VERSION=""
   PLATFORM=""
   BUILD_DIR=""
-  PACKAGER_VERSION="$DEFAULT_PACKAGER_VERSION"
+  PACKAGER_VERSION=""
   FAIL_ON_NON_LINUX="true"
 
   while [[ $# -gt 0 ]]; do
@@ -339,15 +358,18 @@ main() {
     esac
   done
 
-  [[ -n "$INPUT" ]] || die "missing --input"
-  [[ -n "$OUTPUT" ]] || die "missing --output"
-  [[ -n "$PYTHON_VERSION" ]] || die "missing --python"
-  [[ -n "$PLATFORM" ]] || die "missing --platform"
-  [[ -n "$PACKAGER_VERSION" ]] || die "missing --packager-version"
+  # Each message names both the action input and the flag. In the action, an
+  # empty value comes from the workflow, not from a typo on the command line.
+  [[ -n "$INPUT" ]] || fail "missing input-path (--input)"
+  [[ -n "$OUTPUT" ]] || fail "missing output-path (--output)"
+  [[ -n "$PYTHON_VERSION" ]] || fail "missing python-version (--python)"
+  [[ -n "$PLATFORM" ]] || fail "missing platform (--platform)"
+  # Empty means the default, the same as for --build-dir.
+  : "${PACKAGER_VERSION:=$DEFAULT_PACKAGER_VERSION}"
 
   case "$FAIL_ON_NON_LINUX" in
     true | false) ;;
-    *) die "--fail-on-non-linux must be true or false, got: $FAIL_ON_NON_LINUX" ;;
+    *) fail "fail-on-non-linux (--fail-on-non-linux) must be true or false, got: $FAIL_ON_NON_LINUX" ;;
   esac
 
   # --- guard rails ---
@@ -366,9 +388,7 @@ main() {
 
   local architecture
   architecture="$(platform_architecture "$PLATFORM")" ||
-    fail "unsupported platform: $PLATFORM. Expected one of: aarch64-manylinux2014," \
-      "x86_64-manylinux2014, aarch64-manylinux_2_28, x86_64-manylinux_2_28," \
-      "aarch64-manylinux_2_34, x86_64-manylinux_2_34."
+    fail "unsupported platform: $PLATFORM. Expected one of: ${SUPPORTED_PLATFORMS// /, }."
 
   local runtime
   runtime="$(python_version_runtime "$PYTHON_VERSION")" ||
@@ -396,10 +416,10 @@ main() {
   local tool
   for tool in uv uvx jq; do
     command -v "$tool" >/dev/null 2>&1 ||
-      die "required tool not found on PATH: $tool"
+      fail "required tool not found on PATH: $tool"
   done
 
-  [[ -f "$INPUT/pyproject.toml" ]] || die "no pyproject.toml in: $INPUT"
+  [[ -f "$INPUT/pyproject.toml" ]] || fail "no pyproject.toml in input-path: $INPUT"
 
   # Resolve every path now, so the uv --directory below cannot shift them.
   # Every path is resolved with cd -P and pwd -P, so the build-dir checks below

@@ -54,15 +54,16 @@ inputs:
   enable-cache:
     description: >-
       Turn on uv's GitHub Actions cache, keyed off the nearest uv.lock at or
-      above input-path.
+      above input-path. true, false or auto. With auto, setup-uv decides, and
+      turns the cache on for GitHub-hosted runners only.
     default: "true"
   fail-on-non-linux:
     description: >-
-      Refuse to run on a non-Linux runner. Linux runners are the only ones
-      this action is tested on.
+      Refuse to run on a non-Linux runner, true or false. Linux runners are
+      the only ones this action is tested on.
     default: "true"
   upload-artifact:
-    description: Upload the zip as a workflow artifact. Off by default.
+    description: Upload the zip as a workflow artifact, true or false. Off by default.
     default: "false"
   artifact-name:
     # A composite `default:` can only be a fixed string, so the derived default
@@ -97,6 +98,30 @@ outputs:
 runs:
   using: composite
   steps:
+    # Be aware that the `if:` checks below and setup-uv compare exact strings,
+    # so "True" or "yes" would quietly count as false. This step runs first
+    # because enable-cache goes straight to setup-uv, which also takes auto.
+    - name: Check boolean inputs
+      shell: bash
+      run: |
+        case "$ENABLE_CACHE" in
+          true | false | auto) ;;
+          *)
+            echo "::error::enable-cache must be true, false or auto, got: $ENABLE_CACHE"
+            exit 1
+            ;;
+        esac
+        case "$UPLOAD_ARTIFACT" in
+          true | false) ;;
+          *)
+            echo "::error::upload-artifact must be true or false, got: $UPLOAD_ARTIFACT"
+            exit 1
+            ;;
+        esac
+      env:
+        ENABLE_CACHE: ${{ inputs.enable-cache }}
+        UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+
     # A workspace member has no uv.lock of its own, so the glob points at the
     # nearest one at or above input-path. If the glob matches nothing, setup-uv
     # warns that the cache "will never get invalidated", then uses a fixed key,
@@ -179,3 +204,6 @@ runs:
         path: ${{ steps.package.outputs.zip-path }}
         retention-days: ${{ inputs.artifact-retention-days }}
         if-no-files-found: error
+        # The zip is already compressed, so compressing it again costs time
+        # for no gain.
+        compression-level: 0
