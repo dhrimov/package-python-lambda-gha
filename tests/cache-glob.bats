@@ -68,10 +68,19 @@ setup() {
 
 @test "cache_dependency_glob checks only input-path itself when it is outside the workspace" {
   mkdir -p "$BATS_TEST_TMPDIR/elsewhere/orders"
-  touch "$BATS_TEST_TMPDIR/elsewhere/orders/uv.lock" "$BATS_TEST_TMPDIR/elsewhere/uv.lock"
+  touch "$BATS_TEST_TMPDIR/elsewhere/orders/uv.lock"
   outside="$(cd -P "$BATS_TEST_TMPDIR/elsewhere/orders" && pwd -P)"
   run cache_dependency_glob "$outside" "$workspace"
   [ "$status" -eq 0 ]
+  [ "$output" = "$outside/uv.lock" ]
+}
+
+@test "cache_dependency_glob does not walk up from an input-path outside the workspace" {
+  mkdir -p "$BATS_TEST_TMPDIR/elsewhere/orders"
+  touch "$BATS_TEST_TMPDIR/elsewhere/uv.lock"
+  outside="$(cd -P "$BATS_TEST_TMPDIR/elsewhere/orders" && pwd -P)"
+  run cache_dependency_glob "$outside" "$workspace"
+  [ "$status" -eq 1 ]
   [ "$output" = "$outside/uv.lock" ]
 }
 
@@ -86,6 +95,14 @@ setup() {
   run cache_dependency_glob "lambdas/[orders]*?" "$workspace"
   [ "$status" -eq 0 ]
   [ "$output" = "$workspace/lambdas/[[]orders][*][?]/uv.lock" ]
+}
+
+@test "cache_dependency_glob doubles a backslash in the path" {
+  mkdir -p "$workspace/lambdas/or\\ders"
+  touch "$workspace/lambdas/or\\ders/uv.lock"
+  run cache_dependency_glob "lambdas/or\\ders" "$workspace"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$workspace/lambdas/or\\\\ders/uv.lock" ]
 }
 
 @test "cache_dependency_glob falls back to <input-path>/uv.lock when no lock is found" {

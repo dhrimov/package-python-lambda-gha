@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same PR cancels the older run. Runs on main always
+# finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # AWS Lambda's unzipped deployment package limit, in bytes.
   AWS_LAMBDA_MAX_UNZIP_SIZE: 262144000

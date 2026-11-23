@@ -144,9 +144,9 @@ own `actions/checkout` step. `upload-artifact: true` needs nothing extra.
 | `platform` | **none - required** | uv target platform: `aarch64-manylinux2014`, `x86_64-manylinux2014`, `aarch64-manylinux_2_28`, `x86_64-manylinux_2_28`, `aarch64-manylinux_2_34`, or `x86_64-manylinux_2_34`. See [`platform` and the Lambda runtime](#platform-and-the-lambda-runtime). |
 | `packager-version` | `1.0.0` | `package-python-function` version to package with. |
 | `uv-version` | `""` | uv version to install, `0.10.0` or later. Empty means the version pinned at the repo root (`GITHUB_WORKSPACE`), or the latest release if there is no pin. A pin in `input-path` is not read. |
-| `enable-cache` | `true` | Turn on uv's Actions cache, keyed off the nearest `uv.lock` at or above `input-path`. |
-| `fail-on-non-linux` | `true` | Refuse to run on a non-Linux runner. |
-| `upload-artifact` | `false` | Upload the zip as a workflow artifact. |
+| `enable-cache` | `true` | Turn on uv's Actions cache, keyed off the nearest `uv.lock` at or above `input-path`. One of `true`, `false` or `auto`. With `auto`, setup-uv decides, and turns the cache on for GitHub-hosted runners only. |
+| `fail-on-non-linux` | `true` | Refuse to run on a non-Linux runner, `true` or `false`. |
+| `upload-artifact` | `false` | Upload the zip as a workflow artifact, `true` or `false`. |
 | `artifact-name` | derived | Artifact name. See [Artifacts](#artifacts). |
 | `artifact-retention-days` | `7` | Days to keep the uploaded artifact. |
 

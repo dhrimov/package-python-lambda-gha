@@ -11,13 +11,15 @@
 
 # Turns a path into a glob that matches only that path. setup-uv hands the glob to
 # @actions/glob, where *, ? and [ are special, and wrapping one in [] makes it
-# literal.
+# literal. On Linux \ is special too - it is the escape character - so it
+# gets doubled. Braces and extglobs are not: @actions/glob turns both off.
 glob_escape() {
   local path="$1" escaped="" char i
   for ((i = 0; i < ${#path}; i++)); do
     char="${path:i:1}"
     case "$char" in
       '*' | '?' | '[') escaped+="[$char]" ;;
+      '\') escaped+='\\' ;;
       *) escaped+="$char" ;;
     esac
   done
