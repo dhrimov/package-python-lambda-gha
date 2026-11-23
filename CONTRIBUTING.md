@@ -12,7 +12,7 @@ For a packaging bug, the details worth having are:
 
 - the `uses:` step, with `python-version` and `platform`
 - the `::error::` or `error:` line the run printed
-- the log of the failing step, or which `[N/5]` group it died in
+- the log of the failing step, or which `[N/9]` group it died in
 - whether it also fails when you run `build.sh` directly (see below)
 
 A link to a public run beats a description of one.
@@ -30,17 +30,22 @@ sudo apt-get install --no-install-recommends shellcheck bats
 ```
 
 ```bash
-shellcheck build.sh
-bats tests/build.bats
+shellcheck build.sh cache-glob.sh
+bats tests
 ```
 
 Both run on every pull request through `.github/workflows/ci.yml`. They take
 seconds and need no network.
 
-`tests/build.bats` covers the pure helpers at the top of `build.sh` and nothing
-else. It sources the script, which defines its functions without running the
-pipeline - that is what the `BASH_SOURCE`/`$0` guard at the bottom of the file
-is for. Keep new helpers pure and they stay testable the same way.
+`tests/build.bats` covers the pure helpers at the top of `build.sh`, plus one
+check that the uv floor is the same everywhere it appears. It sources the
+script, which defines its functions without running the pipeline - that is what
+the `BASH_SOURCE`/`$0` guard at the bottom of the file is for. Keep new helpers
+pure and they stay testable the same way.
+
+`tests/cache-glob.bats` covers `cache-glob.sh`. `action.yml` runs that script
+before setup-uv to find the `uv.lock` the cache is keyed on. It lives in its
+own file because uv is not installed yet at that point.
 
 ## Running the action locally
 
@@ -68,9 +73,9 @@ keep.
 `.github/workflows/e2e.yml` runs the action against the fixtures in `tests/`:
 four Python versions across both `manylinux2014` platforms, the four
 `manylinux_2_28` and `manylinux_2_34` platforms on Python 3.13, plus the
-nested-zip fallback, the multi-lambda pattern, hash stability, a custom
-`build-dir`, the guard rails, and artifact naming. It
-is the only suite that proves the action works, and it costs a lot more than
+nested-zip fallback, the multi-lambda pattern, a uv workspace, the uv floor,
+hash stability, a custom `build-dir`, the guard rails, and artifact naming. It is
+the only suite that proves the action works, and it costs a lot more than
 `ci.yml`.
 
 Workflows on a pull request from a fork wait for a maintainer to approve the
@@ -90,6 +95,21 @@ The `large` fixture is what proves the nested-zip fallback. It pins `numpy`,
 where the fallback kicks in. A bump has to keep both sides of that true, so it
 is a hand edit too. It runs on Python 3.13 only: these packages ship no cp314
 `manylinux2014` wheels.
+
+The `workspace` fixture is a uv workspace: a virtual root with one `uv.lock`, a
+shared `common` library in `libs/`, and two lambda members in `lambdas/` that
+both depend on it. `common` depends on `vendor/textutil` by path, and
+`textutil` is not a workspace member. So the job also covers a local package
+that is not a member, and a local package the lambda only gets through another
+one.
+
+`orders` also pins `markupsafe` exactly. It is a compiled dependency no other
+member uses, so the job can check that it is missing from the `payments` zip.
+
+The `uv-floor` job packages the same fixture with `uv-version: 0.10.0`, the
+oldest uv the action supports. If you raise that floor, update these together:
+`MIN_UV_VERSION` in `build.sh`, that job's matrix, and the `uv-version` text in
+`action.yml` and `README.md`. `tests/build.bats` fails if they don't match.
 
 ## Adding a Python runtime
 
@@ -126,3 +146,29 @@ edit:
 - Pin every action to a full commit SHA with a trailing `# vX.Y.Z` comment.
   Dependabot rewrites the SHA and the comment together, so the form matters.
 - `.editorconfig` covers indentation and line endings.
+
+## Known gaps
+
+These are already known, so there is no need to open an issue for them. A PR
+is welcome:
+
+- Local dependencies with an environment marker are refused. To support them,
+  each local wheel has to go to the install step together with its marker.
+- An empty `uv-version` reads the pin only from `GITHUB_WORKSPACE`, not from
+  `input-path`.
+- Matrix jobs for different platforms share one cache key, so only the first
+  job's cache is saved. setup-uv's `cache-suffix` would split it.
+- A stray `uv.lock` inside a workspace member wins the cache key over the root
+  lock. This can happen when separate projects are moved into one workspace
+  and their old locks are left behind. `cache-glob.sh` takes the first
+  `uv.lock` it finds walking up from `input-path`. uv itself ignores a lock
+  inside a member: `uv lock --check` and the build both use the root lock, so
+  the zip is still right. Only the cache is wrong. Its key comes from the stray
+  file, so a change to the root lock never refreshes it. Options to look into:
+  - Stop the walk at the first directory whose `pyproject.toml` has a
+    `[tool.uv.workspace]` table, and take the `uv.lock` there. This needs a
+    TOML check in bash, before uv is installed.
+  - `uv workspace dir` gives the right root, but setup-uv computes the cache
+    key while it installs uv, so the action can't call uv before it.
+  - A cheap first step: warn in the `action.yml` step when a `uv.lock` is
+    found below a directory that has `[tool.uv.workspace]`.

@@ -18,7 +18,7 @@ jobs:
 
       - name: shellcheck
         # Comes preinstalled on the GitHub-hosted Ubuntu images.
-        run: shellcheck build.sh
+        run: shellcheck build.sh cache-glob.sh
 
       - name: Install bats
         run: |
@@ -26,4 +26,4 @@ jobs:
           sudo apt-get install --no-install-recommends --yes bats
 
       - name: bats
-        run: bats tests/build.bats
+        run: bats tests

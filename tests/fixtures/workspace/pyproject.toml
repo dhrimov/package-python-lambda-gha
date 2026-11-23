@@ -1,0 +1,5 @@
+# The workspace fixture's root. It has no [project] table, so it is a virtual
+# root: not a package itself, and input-path can't point at it. The one uv.lock
+# next to this file covers every member.
+[tool.uv.workspace]
+members = ["libs/*", "lambdas/*"]

@@ -47,11 +47,14 @@ inputs:
     default: 1.0.0
   uv-version:
     description: >-
-      uv version to install. Empty means the version pinned in the project,
-      or the latest release.
+      uv version to install, 0.10.0 or later. Empty means the version pinned
+      at the repo root (GITHUB_WORKSPACE), or the latest release if there is
+      no pin. A pin in input-path is not read.
     default: ""
   enable-cache:
-    description: Turn on uv's GitHub Actions cache, keyed off <input-path>/uv.lock.
+    description: >-
+      Turn on uv's GitHub Actions cache, keyed off the nearest uv.lock at or
+      above input-path.
     default: "true"
   fail-on-non-linux:
     description: >-
@@ -94,14 +97,38 @@ outputs:
 runs:
   using: composite
   steps:
+    # A workspace member has no uv.lock of its own, so the glob points at the
+    # nearest one at or above input-path. If the glob matches nothing, setup-uv
+    # warns that the cache "will never get invalidated", then uses a fixed key,
+    # saves the cache once and never updates it. input-path can't contain a
+    # newline, because setup-uv reads one glob per line, and so does
+    # GITHUB_OUTPUT.
+    - name: Find the lock file to key the cache on
+      id: cache-glob
+      shell: bash
+      run: |
+        if [[ "$INPUT_PATH" == *$'\n'* ]]; then
+          echo "::error::input-path can't contain a newline."
+          exit 1
+        fi
+        source "$GITHUB_ACTION_PATH/cache-glob.sh"
+        if glob="$(cache_dependency_glob "$INPUT_PATH" "$GITHUB_WORKSPACE")"; then
+          echo "Keying the uv cache on $glob"
+        else
+          echo "::notice::No uv.lock found at or above input-path $INPUT_PATH," \
+            "up to the workspace $GITHUB_WORKSPACE. Using $glob, so setup-uv will" \
+            "warn that the cache never gets invalidated."
+        fi
+        echo "glob=$glob" >>"$GITHUB_OUTPUT"
+      env:
+        INPUT_PATH: ${{ inputs.input-path }}
+
     - name: Install uv
       uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       with:
         version: ${{ inputs.uv-version }}
         enable-cache: ${{ inputs.enable-cache }}
-        # Without a glob pointed at the project's own lock file, setup-uv warns
-        # that the cache "will never get invalidated" and then does nothing.
-        cache-dependency-glob: ${{ inputs.input-path }}/uv.lock
+        cache-dependency-glob: ${{ steps.cache-glob.outputs.glob }}
 
     - name: Package
       id: package
