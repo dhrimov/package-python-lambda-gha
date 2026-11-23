@@ -19,7 +19,7 @@ glob_escape() {
     char="${path:i:1}"
     case "$char" in
       '*' | '?' | '[') escaped+="[$char]" ;;
-      '\') escaped+='\\' ;;
+      "\\") escaped+="\\\\" ;;
       *) escaped+="$char" ;;
     esac
   done
