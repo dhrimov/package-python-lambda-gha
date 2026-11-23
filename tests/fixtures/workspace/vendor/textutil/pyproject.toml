@@ -5,6 +5,9 @@ description = "Path dependency of the workspace fixture's shared library for the
 requires-python = ">=3.11"
 dependencies = []
 
+# Hatchling on purpose, while the other fixtures use uv_build: uv builds those
+# itself, so this is the one package that tests a normal PEP 517 build, with
+# the backend fetched from the index.
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
