@@ -9,10 +9,11 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same PR cancels the older run. Runs on main always
-# finish.
+# A newer push to the same PR cancels the older run. Every other run gets a
+# group of its own, so runs on main always finish - a shared group would
+# still replace a pending run with the next one.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
